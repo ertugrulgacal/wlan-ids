@@ -11,6 +11,37 @@ ap_list = []
 deauth_counter = Counter()
 last_packet_time = 0
 
+def update_average_signal_without_bssid(ap_list, bssid, ssid, signal_strength):
+    for ap in ap_list:
+        if ap[0] == ssid:
+            ap[1] = (ap[1] * ap[2] + signal_strength) / (ap[2] + 1) # calculate new average
+            ap[2] += 1
+            return
+
+    # If AP is not in the list, add it with the initial signal strength
+    ap_list.append([ssid, signal_strength, 1])
+   
+def detect_evil_twin_without_bssid(packet):
+    bssid = packet[Dot11].addr3
+    ssid = packet[Dot11Elt].info.decode()
+    signal_strength = -(packet[RadioTap].dBm_AntSignal)
+
+    is_evil_twin = False
+
+    for ap in ap_list:
+        if ap[0] == ssid and ap[2] > 1: # check if ap already exists in list
+            signal_diff = abs(ap[1] - signal_strength)
+
+            if signal_diff > SIGNAL_THRESHOLD: # check if there is a signal str difference
+                print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+                is_evil_twin = True
+                break
+
+    if not is_evil_twin:
+        update_average_signal_without_bssid(ap_list, bssid, ssid, signal_strength)
+
+    #print(ap_list)
+
 def update_average_signal(ap_list, bssid, ssid, signal_strength):
     for ap in ap_list:
         if ap[0] == bssid and ap[1] == ssid:
@@ -82,8 +113,7 @@ def scan_packets(packet):
             detect_deauth(packet)
             
         elif packet.haslayer(Dot11Beacon): # Beacon packet
-            print(packet[Dot11Elt].info.decode())
-            detect_evil_twin(packet)
+            detect_evil_twin_without_bssid(packet)
 
 def sniff_packets(interface="wlan0mon"):
     sniff(iface=interface, prn=scan_packets, store=False)

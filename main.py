@@ -3,7 +3,7 @@ from collections import Counter
 import os
 
 INTERFACE = "wlan0"
-SIGNAL_THRESHOLD = 10
+SIGNAL_THRESHOLD = 10 
 DEAUTH_THRESHOLD = 10
 DEAUTH_INTERVAL = 30 
  
@@ -37,7 +37,7 @@ def detect_evil_twin(packet):
     is_evil_twin = False
 
     for ap in ap_list:
-        if ap[0] == bssid and ap[1] == ssid and ap[3] > 1: # check if ap already exists in list
+        if ap[0] == bssid and ap[1] == ssid and ap[3] > 20: # check if ap already exists in list
             signal_diff = abs(ap[2] - signal_strength)
 
             if signal_diff > SIGNAL_THRESHOLD: # check if there is a signal str difference
@@ -48,6 +48,7 @@ def detect_evil_twin(packet):
     if not is_evil_twin:
         update_average_signal(ap_list, bssid, ssid, signal_strength)
 
+    #print(len(ap_list))
     #print(ap_list, ssid , signal_strength)
 
 def detect_deauth(packet):
@@ -90,7 +91,6 @@ def scan_packets(packet):
             detect_deauth(packet)
             
         elif packet.haslayer(Dot11Beacon): # Beacon packet
-            print(packet.addr3, packet[Dot11Elt].info.decode(), packet.dBm_AntSignal)
             detect_evil_twin(packet)
 
 def sniff_packets(interface="wlan0mon"):
@@ -101,7 +101,7 @@ if __name__ == "__main__":
         hopper_thread = threading.Thread(target=channel_hopper)
         hopper_thread.daemon = True
         hopper_thread.start()
-        
+
         enable_monitor_mode()
         sniff_packets(INTERFACE + "mon")
     except KeyboardInterrupt:

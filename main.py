@@ -1,6 +1,8 @@
 from scapy.all import *
 from collections import Counter
 import os
+import threading
+import time
 
 INTERFACE = "wlan0"
 SIGNAL_THRESHOLD = 10 
@@ -10,14 +12,16 @@ DEAUTH_INTERVAL = 30
 ap_list = []
 deauth_counter = Counter()
 last_packet_time = 0
+stop_event = threading.Event()
 
 def channel_hopper():
-    channels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]  # Add more channels as needed
-
-    while True:
+    channels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    while not stop_event.is_set(): 
         for channel in channels:
+            if stop_event.is_set():
+                break
             os.system(f"iwconfig {INTERFACE}mon channel {channel}")
-            time.sleep(1)  # Adjust the sleep duration based on your needs
+            time.sleep(1)
 
 def update_average_signal(ap_list, bssid, ssid, signal_strength):
     for ap in ap_list:
@@ -93,17 +97,35 @@ def scan_packets(packet):
         elif packet.haslayer(Dot11Beacon): # Beacon packet
             detect_evil_twin(packet)
 
-def sniff_packets(interface="wlan0mon"):
-    sniff(iface=interface, prn=scan_packets, store=False)
+def sniff_in_thread(interface, stop_event):
+    try:
+        sniff(iface=interface, prn=scan_packets, store=False, stop_filter=lambda x: stop_event.is_set())
+    except Exception as e:
+        print("Sniffing error:", e)
 
 if __name__ == "__main__":
     try:
-        hopper_thread = threading.Thread(target=channel_hopper)
-        hopper_thread.daemon = True
-        hopper_thread.start()
-
         enable_monitor_mode()
-        sniff_packets(INTERFACE + "mon")
+        hopper_thread = threading.Thread(target=channel_hopper)
+        sniffer_thread = threading.Thread(target=sniff_in_thread, args=(INTERFACE+"mon", stop_event))
+        
+        hopper_thread.daemon = True
+        sniffer_thread.daemon = True
+
+        hopper_thread.start()
+        sniffer_thread.start()
+        
+        # Wait for threads to complete or KeyboardInterrupt
+        while hopper_thread.is_alive() and sniffer_thread.is_alive():
+            time.sleep(1)
+
     except KeyboardInterrupt:
         print("Keyboard Interrupt detected.")
+        stop_event.set()  # Signal threads to stop
+
+        hopper_thread.join()
+        sniffer_thread.join()
+
+        print(ap_list)
+
         disable_monitor_mode()

@@ -20,7 +20,7 @@ def channel_hopper():
         for channel in channels:
             if stop_event.is_set():
                 break
-            os.system(f"iwconfig {INTERFACE}mon channel {channel}")
+            os.system(f"sudo iwconfig {INTERFACE}mon channel {channel}")
             time.sleep(1)
 
 def update_average_signal(ap_list, bssid, ssid, signal_strength):

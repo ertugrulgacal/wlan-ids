@@ -5,8 +5,8 @@ import threading
 import time
 
 INTERFACE = "wlan0"
-SIGNAL_THRESHOLD = 10 
-DEAUTH_THRESHOLD = 10
+SIGNAL_THRESHOLD = 30 
+DEAUTH_THRESHOLD = 20
 DEAUTH_INTERVAL = 30 
  
 ap_list = []

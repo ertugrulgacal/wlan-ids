@@ -24,51 +24,50 @@ def channel_hopper():
             os.system(f"sudo iwconfig {INTERFACE}mon channel {channel}")
             time.sleep(CHANNEL_HOPPING_INTERVAL)
 
-def update_average_signal(ap_list, bssid, ssid, signal_strength, channel_number):
-    for ap in ap_list:
-        if ap[0] == bssid and ap[1] == ssid:
-            ap[2] = (ap[2] * ap[4] + signal_strength) / (ap[4] + 1) # calculate new average
-            ap[4] += 1
-            return
+def update_average_signal(index, ap_list, signal_strength):
+        ap_list[index][2] = (ap_list[index][2] * ap_list[index][4] + signal_strength) / (ap_list[index][4] + 1) # calculate new average
+        ap_list[index][4] += 1
 
-    # If AP is not in the list, add it with the initial signal strength
-    ap_list.append([bssid, ssid, signal_strength, channel_number, 1])
+def matching_channel_number(index, ap_list, channel_number):
+    if ap_list[index][3] != channel_number:
+        return 1
+    return -1
 
-def check_matching_channel_number(ap_list, bssid, channel_number):
-    for ap in ap_list:
+def rssi_difference(index, ap_list, rssi):
+    if ap_list[index][4] > 20:
+        rssi_diff = abs(ap_list[index][2] - rssi)
+
+        if rssi_diff > SIGNAL_THRESHOLD:
+            return 1
+    return -1 
+
+def get_ap_index(ap_list, bssid):
+    for index, ap in enumerate(ap_list):
         if ap[0] == bssid:
-            if ap[3] != channel_number:
-                return 1
-            return 0
+            return index
     return -1
 
 def detect_evil_twin(packet):
     bssid = packet[Dot11].addr3
     ssid = packet[Dot11Elt].info.decode()
-    signal_strength = -(packet[RadioTap].dBm_AntSignal)
+    rssi = -(packet[RadioTap].dBm_AntSignal)
     channel_number = packet.channel
 
-    # This variable is used to determine if the signal value in the ap_list should be updated or not.
-    # If we suspect an attack we don't update the value in order to preserve the normal signal value.
-    is_evil_twin = False
+    if get_ap_index(ap_list, bssid) >= 0:
+        ap_list_index = get_ap_index(ap_list, bssid)
+    else:
+        ap_list.append([bssid, ssid, rssi, channel_number, 1])
+        return
 
-    if check_matching_channel_number(ap_list, bssid, channel_number) == 1: # Checks if the channel used corresponds to the one recorded before.
+    if matching_channel_number(ap_list_index, ap_list, channel_number) == 1: # Checks if the channel used corresponds to the one recorded before.
         print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+        return
 
-    for ap in ap_list:
-        if ap[0] == bssid and ap[4] > 20: # check if ap already exists in list
-            signal_diff = abs(ap[2] - signal_strength)
+    if rssi_difference(ap_list_index, ap_list, rssi) == 1:
+        print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+        return
 
-            if signal_diff > SIGNAL_THRESHOLD: # check if there is a signal str difference
-                print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
-                is_evil_twin = True
-                break
-
-    if not is_evil_twin:
-        update_average_signal(ap_list, bssid, ssid, signal_strength, channel_number)
-
-    #print(len(ap_list))
-    #print(ap_list, ssid , signal_strength)
+    update_average_signal(ap_list_index, ap_list, rssi)
 
 def detect_deauth(packet):
     global last_packet_time
@@ -85,6 +84,10 @@ def detect_deauth(packet):
         # Check if the number of deauthentication packets from a source exceeds the threshold
         if deauth_counter[src] > DEAUTH_THRESHOLD:
             print(f"Possible Deauthentication Attack Detected from {src}")
+
+def print_ap_list():
+    for ap in ap_list:
+        print(f"BSSID:{ap[0]}\tSSID:{ap[1]}\tAvg RSSI:{ap[2]:0.2f}\tChannel:{ap[3]}\tCount{ap[4]}")
 
 def enable_monitor_mode():
     try:
@@ -142,6 +145,6 @@ if __name__ == "__main__":
         hopper_thread.join()
         sniffer_thread.join()
 
-        print(ap_list)
+        print_ap_list()
 
         disable_monitor_mode()

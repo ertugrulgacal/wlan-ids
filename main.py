@@ -5,7 +5,7 @@ import threading
 import time
 
 INTERFACE = "wlan0"
-SIGNAL_THRESHOLD = 30 
+SIGNAL_THRESHOLD = 10 
 DEAUTH_THRESHOLD = 20
 DEAUTH_INTERVAL = 30 
 CHANNEL_HOPPING_INTERVAL = 0.5
@@ -25,21 +25,51 @@ def channel_hopper():
             time.sleep(CHANNEL_HOPPING_INTERVAL)
 
 def update_average_signal(index, ap_list, signal_strength):
-        ap_list[index][2] = (ap_list[index][2] * ap_list[index][4] + signal_strength) / (ap_list[index][4] + 1) # calculate new average
-        ap_list[index][4] += 1
+        ap_list[index][2] = (ap_list[index][2] * ap_list[index][5] + signal_strength) / (ap_list[index][5] + 1) # calculate new average
+        ap_list[index][5] += 1
+
+def calculate_moving_average(index, signal_strength, window_size=5):
+    """
+    Calculate the moving average of the last 'window_size' signal strengths for a given access point.
+    """
+    # Access point'in RSSI değerlerini tutan listeyi al (yeni bir alan olarak eklenmiş olacak)
+    rssi_values = ap_list[index][6]
+
+    # Yeni RSSI değerini listeye ekle
+    rssi_values.append(signal_strength)
+    
+    # Eğer liste belirlenen pencere boyutundan büyükse, en eski değeri çıkar
+    if len(rssi_values) > window_size:
+        rssi_values.pop(0)
+
+    # Yeni ortalama hesapla
+    new_average = sum(rssi_values) / len(rssi_values)
+    return new_average
+
+def check_evil_twin_threshold(index, new_average, threshold=SIGNAL_THRESHOLD):
+    """
+    Check if the new average RSSI significantly deviates from the recorded average.
+    If so, it might indicate an Evil Twin attack.
+    """
+    current_average = ap_list[index][2]
+
+    if abs(current_average - new_average) > threshold and ap_list[index][5] >= 20:
+        # Eşik değeri aşıldı, Evil Twin saldırısı olabilir
+        return True
+    else:
+        # Ortalama güncelle
+        ap_list[index][2] = new_average
+        return False            
 
 def matching_channel_number(index, ap_list, channel_number):
     if ap_list[index][3] != channel_number:
         return 1
     return -1
 
-def rssi_difference(index, ap_list, rssi):
-    if ap_list[index][4] > 20:
-        rssi_diff = abs(ap_list[index][2] - rssi)
-
-        if rssi_diff > SIGNAL_THRESHOLD:
-            return 1
-    return -1 
+def matching_crypto(index, ap_list, crypto):
+    if ap_list[index][4] != crypto:
+        return 1
+    return -1
 
 def get_ap_index(ap_list, bssid):
     for index, ap in enumerate(ap_list):
@@ -48,26 +78,32 @@ def get_ap_index(ap_list, bssid):
     return -1
 
 def detect_evil_twin(packet):
+    netstats = packet[Dot11Beacon].network_stats()
     bssid = packet[Dot11].addr3
     ssid = packet[Dot11Elt].info.decode()
     rssi = -(packet[RadioTap].dBm_AntSignal)
     channel_number = packet.channel
+    crypto = '/'.join(netstats['crypto'])
 
-    if get_ap_index(ap_list, bssid) >= 0:
-        ap_list_index = get_ap_index(ap_list, bssid)
+    if (ap_index := get_ap_index(ap_list, bssid)) >= 0:
+        if matching_channel_number(ap_index, ap_list, channel_number) == 1:
+            print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+            return
+        
+        if matching_crypto(ap_index, ap_list, crypto) == 1:
+            print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+            print(f"Legit AP Crypto: {ap_list[ap_index][4]} \t Rogue AP Crypto: {crypto}")
+            return
+        
+        new_average = calculate_moving_average(ap_index, rssi)
+        if check_evil_twin_threshold(ap_index, new_average):
+            print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
+            return
+        if ap_list[ap_index][5] < 50:
+            update_average_signal(ap_index, ap_list, rssi)
     else:
-        ap_list.append([bssid, ssid, rssi, channel_number, 1])
-        return
-
-    if matching_channel_number(ap_list_index, ap_list, channel_number) == 1: # Checks if the channel used corresponds to the one recorded before.
-        print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
-        return
-
-    if rssi_difference(ap_list_index, ap_list, rssi) == 1:
-        print(f"Possible Evil Twin detected: {ssid} (BSSID: {bssid})")
-        return
-
-    update_average_signal(ap_list_index, ap_list, rssi)
+        # Eğer erişim noktası ilk kez görülüyorsa, listeye ekle ve gerekli veri yapılarını başlat
+        ap_list.append([bssid, ssid, rssi, channel_number, crypto, 1, [rssi]])  # Yeni alan: son RSSI değerlerini tutacak liste
 
 def detect_deauth(packet):
     global last_packet_time
@@ -87,7 +123,7 @@ def detect_deauth(packet):
 
 def print_ap_list():
     for ap in ap_list:
-        print(f"BSSID:{ap[0]}\tSSID:{ap[1]}\tAvg RSSI:{ap[2]:0.2f}\tChannel:{ap[3]}\tCount{ap[4]}")
+        print(f"BSSID:{ap[0]}\tSSID:{ap[1]}\tAvg RSSI:{ap[2]:0.2f}\tChannel:{ap[3]}\tCount{ap[5]}")
 
 def enable_monitor_mode():
     try:
@@ -100,7 +136,7 @@ def enable_monitor_mode():
 
 def disable_monitor_mode():
     try:
-        os.system(f"sudo airmon-ng stop {INTERFACE}" + "mon")
+        os.system(f"sudo airmon-ng stop {INTERFACE}mon")
         os.system("sudo systemctl start NetworkManager")
     except:
         print("Couldnt disable monitor mode.")
@@ -113,7 +149,12 @@ def scan_packets(packet):
             detect_deauth(packet)
             
         elif packet.haslayer(Dot11Beacon): # Beacon packet
-            print(f"{packet[Dot11Elt].info.decode()}, {packet.dBm_AntSignal}")
+            netstats = packet[Dot11Beacon].network_stats()
+            ssid = netstats['ssid']
+            crypto = '/'.join(netstats['crypto'])
+            
+            #print(f"SSID: {ssid}   Crypto: {crypto}")
+
             detect_evil_twin(packet)
 
 def sniff_in_thread(interface, stop_event):
@@ -126,7 +167,7 @@ if __name__ == "__main__":
     try:
         enable_monitor_mode()
         hopper_thread = threading.Thread(target=channel_hopper)
-        sniffer_thread = threading.Thread(target=sniff_in_thread, args=(INTERFACE+"mon", stop_event))
+        sniffer_thread = threading.Thread(target=sniff_in_thread, args=(INTERFACE + "mon", stop_event))
         
         hopper_thread.daemon = True
         sniffer_thread.daemon = True
@@ -148,3 +189,4 @@ if __name__ == "__main__":
         print_ap_list()
 
         disable_monitor_mode()
+

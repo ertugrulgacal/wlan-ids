@@ -3,17 +3,31 @@ from collections import Counter
 import os
 import threading
 import time
+import csv
 
 INTERFACE = "wlan0"
-SIGNAL_THRESHOLD = 10 
+SIGNAL_THRESHOLD = 30 
 DEAUTH_THRESHOLD = 20
 DEAUTH_INTERVAL = 30 
 CHANNEL_HOPPING_INTERVAL = 0.5
 
+csv_list = []
 ap_list = []
 deauth_counter = Counter()
 last_packet_time = 0
 stop_event = threading.Event()
+
+def write_to_csv():
+    file = open('output.csv', 'w', newline ='')
+ 
+    with file:
+        # identifying header  
+        header = ['frame.len', 'wlan.bssid', 'wlan_radio.signal_dbm', 'wlan.country_info.code']
+        writer = csv.DictWriter(file, fieldnames = header)
+        writer.writeheader()
+
+        for item in csv_list:
+            writer.writerow({'frame.len' : item[0], 'wlan.bssid': item[1], 'wlan_radio.signal_dbm': item[2], 'wlan.country_info.code': item[3]})
 
 def channel_hopper():
     channels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
@@ -76,6 +90,25 @@ def get_ap_index(ap_list, bssid):
         if ap[0] == bssid:
             return index
     return -1
+
+def extract_country_code(packet):
+    try:
+        country_info = packet[Dot11EltCountry].info
+        # Extract country code from the bytes
+        country_code_bytes = country_info[:2]
+        country_code = country_code_bytes.decode('utf-8')
+        return country_code
+    except (IndexError, AttributeError):
+        # No Dot11EltCountry or info attribute found
+        return 'NaN'
+
+def add_to_csv_list(packet):
+    frame = len(packet)
+    bssid = packet[Dot11].addr3
+    rssi = packet[RadioTap].dBm_AntSignal
+    country_code = extract_country_code(packet)
+
+    csv_list.append([frame, bssid, rssi, country_code])    
 
 def detect_evil_twin(packet):
     netstats = packet[Dot11Beacon].network_stats()
@@ -149,13 +182,8 @@ def scan_packets(packet):
             detect_deauth(packet)
             
         elif packet.haslayer(Dot11Beacon): # Beacon packet
-            netstats = packet[Dot11Beacon].network_stats()
-            ssid = netstats['ssid']
-            crypto = '/'.join(netstats['crypto'])
-            
-            #print(f"SSID: {ssid}   Crypto: {crypto}")
-
             detect_evil_twin(packet)
+            add_to_csv_list(packet)
 
 def sniff_in_thread(interface, stop_event):
     try:
@@ -185,6 +213,8 @@ if __name__ == "__main__":
 
         hopper_thread.join()
         sniffer_thread.join()
+
+        write_to_csv()
 
         print_ap_list()
 

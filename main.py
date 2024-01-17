@@ -3,7 +3,6 @@ from collections import Counter
 import os
 import threading
 import time
-import csv
 
 INTERFACE = "wlan0"
 SIGNAL_THRESHOLD = 30 
@@ -11,36 +10,26 @@ DEAUTH_THRESHOLD = 20
 DEAUTH_INTERVAL = 30 
 CHANNEL_HOPPING_INTERVAL = 0.5
 
-csv_list = []
 ap_list = []
 deauth_counter = Counter()
 last_packet_time = 0
 stop_event = threading.Event()
 
-def write_to_csv():
-    file = open('output.csv', 'w', newline ='')
- 
-    with file:
-        # identifying header  
-        header = ['frame.len', 'wlan.bssid', 'wlan_radio.signal_dbm', 'wlan.country_info.code']
-        writer = csv.DictWriter(file, fieldnames = header)
-        writer.writeheader()
-
-        for item in csv_list:
-            writer.writerow({'frame.len' : item[0], 'wlan.bssid': item[1], 'wlan_radio.signal_dbm': item[2], 'wlan.country_info.code': item[3]})
-
 def channel_hopper():
     channels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    os.system("sudo iwconfig wlan0mon channel 1")
     while not stop_event.is_set(): 
         for channel in channels:
             if stop_event.is_set():
                 break
-            os.system(f"sudo iwconfig {INTERFACE}mon channel {channel}")
+            #os.system(f"sudo iwconfig {INTERFACE}mon channel {channel}")
             time.sleep(CHANNEL_HOPPING_INTERVAL)
 
 def update_average_signal(index, ap_list, signal_strength):
         ap_list[index][2] = (ap_list[index][2] * ap_list[index][5] + signal_strength) / (ap_list[index][5] + 1) # calculate new average
         ap_list[index][5] += 1
+
+# TODO: fix count getting stuck at 50
 
 def calculate_moving_average(index, signal_strength, window_size=5):
     """
@@ -101,14 +90,6 @@ def extract_country_code(packet):
     except (IndexError, AttributeError):
         # No Dot11EltCountry or info attribute found
         return 'NaN'
-
-def add_to_csv_list(packet):
-    frame = len(packet)
-    bssid = packet[Dot11].addr3
-    rssi = packet[RadioTap].dBm_AntSignal
-    country_code = extract_country_code(packet)
-
-    csv_list.append([frame, bssid, rssi, country_code])    
 
 def detect_evil_twin(packet):
     netstats = packet[Dot11Beacon].network_stats()
@@ -183,7 +164,7 @@ def scan_packets(packet):
             
         elif packet.haslayer(Dot11Beacon): # Beacon packet
             detect_evil_twin(packet)
-            add_to_csv_list(packet)
+            pass
 
 def sniff_in_thread(interface, stop_event):
     try:
@@ -213,8 +194,6 @@ if __name__ == "__main__":
 
         hopper_thread.join()
         sniffer_thread.join()
-
-        write_to_csv()
 
         print_ap_list()
 

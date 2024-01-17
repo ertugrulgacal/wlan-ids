@@ -17,6 +17,6 @@
    ```
 4. Change the INTERFACE variable inside the program if youre using an interface that is not wlan0
 5. Run the program with sudo
-   ```js
+   ```sh
    sudo python3 main.py
    ```
